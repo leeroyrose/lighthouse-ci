@@ -14,6 +14,7 @@ declare global {
         token?: string;
         extraHeaders?: Record<string, string>;
         githubToken?: string;
+        githubApiHost?: string;
         githubAppToken?: string;
         serverBaseUrl: string;
         urlReplacementPatterns: string[];
