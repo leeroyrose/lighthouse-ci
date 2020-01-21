@@ -7,7 +7,13 @@
 
 /* eslint-env jest */
 
-module.exports = {
-  shouldRunE2E: () => Boolean(!process.env.CI || process.env.RUN_E2E_TESTS),
-  emptyTest: () => it.skip('not enabled', () => {}),
+const {cleanupE2E} = require('../../test-utils.js');
+
+/** @param {LHCI.E2EState} state */
+module.exports = state => {
+  describe('teardown', () => {
+    it('should cleanup', async () => {
+      await cleanupE2E(state);
+    });
+  });
 };

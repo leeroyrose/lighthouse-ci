@@ -19,9 +19,10 @@ import {Paper} from '../../components/paper';
 import {LhrViewerLink} from '../../components/lhr-viewer-link';
 
 import './lhr-comparison.css';
+import {Modal} from '../../components/modal';
+import {LhrRuntimeDiff, computeRuntimeDiffs} from './lhr-comparison-runtime-diff';
 
-/** @typedef {{id: string, audits: Array<LH.AuditResult>, group: {id: string, title: string}}} IntermediateAuditGroupDef */
-/** @typedef {{id: string, pairs: Array<LHCI.AuditPair>, group: {id: string, title: string}}} AuditGroupDef */
+/** @typedef {{id: string, pairs: Array<LHCI.AuditPair>, group: {id: string, title: string}, showAsUnchanged: boolean}} AuditGroupDef */
 
 /**
  * @param {LH.Result} lhr
@@ -30,46 +31,61 @@ import './lhr-comparison.css';
  * @return {Array<AuditGroupDef>}
  */
 export function computeAuditGroups(lhr, baseLhr, options) {
-  /** @type {Array<IntermediateAuditGroupDef|undefined>} */
-  const rawAuditGroups = Object.entries(lhr.categories)
-    .map(([categoryId, category]) => {
-      const auditRefsGroupedByGroup = _.groupBy(category.auditRefs, ref => ref.group);
-      return auditRefsGroupedByGroup.map(auditRefGroup => {
-        let groupId = auditRefGroup[0].group || '';
-        let group = lhr.categoryGroups && lhr.categoryGroups[groupId];
-        if (!group) {
-          if (auditRefsGroupedByGroup.length !== 1) return;
-          groupId = `category:${categoryId}`;
-          group = {title: category.title, description: category.description};
-        }
-        const audits = auditRefGroup
-          .map(ref => ({...lhr.audits[ref.id], id: ref.id}))
-          .sort((a, b) => (a.score || 0) - (b.score || 0));
-        return {id: groupId, group: {...group, id: groupId}, audits};
-      });
-    })
-    .reduce((a, b) => a.concat(b));
   /** @type {Array<AuditGroupDef>} */
   const auditGroups = [];
-  for (const intermediateGroup of rawAuditGroups) {
-    if (!intermediateGroup) continue;
-    const auditPairs = intermediateGroup.audits
-      .map(audit => {
-        const baseAudit = baseLhr && baseLhr.audits[audit.id || ''];
-        const diffs = baseAudit
-          ? findAuditDiffs(baseAudit, audit, {...options, synthesizeItemKeyDiffs: true})
-          : [];
-        const maxSeverity = Math.max(...diffs.map(getDiffSeverity), 0);
-        return {audit, baseAudit, diffs, maxSeverity, group: intermediateGroup.group};
-      })
-      .filter(pair => !pair.baseAudit || pair.diffs.length);
-    const auditGroup = {
-      id: intermediateGroup.id,
-      group: intermediateGroup.group,
-      pairs: auditPairs.sort((a, b) => (a.audit.score || 0) - (b.audit.score || 0)),
+
+  for (const [categoryId, category] of Object.entries(lhr.categories)) {
+    const categoryAsGroup = {title: category.title, description: category.description};
+    const auditRefsGroupedByGroup = _.groupBy(category.auditRefs, ref => ref.group);
+
+    const unchangedAuditsGroupId = `unchanged:${categoryId}`;
+    /** @type {AuditGroupDef} */
+    const unchangedAuditsGroup = {
+      id: unchangedAuditsGroupId,
+      group: {id: unchangedAuditsGroupId, title: `Unchanged Audits - ${category.title}`},
+      pairs: [],
+      showAsUnchanged: true,
     };
-    if (auditGroup.pairs.length) auditGroups.push(auditGroup);
+
+    for (const auditRefGroup of auditRefsGroupedByGroup) {
+      let groupId = auditRefGroup[0].group || '';
+      let groupWithoutId = lhr.categoryGroups && lhr.categoryGroups[groupId];
+      if (!groupWithoutId) {
+        // Only use the category as the group if the entire category is ungrouped.
+        // The lack of a category when the category otherwise uses groups means it's hidden.
+        if (auditRefsGroupedByGroup.length !== 1) continue;
+        groupId = `category:${categoryId}`;
+        groupWithoutId = categoryAsGroup;
+      }
+      const group = {...groupWithoutId, id: groupId};
+
+      const pairs = auditRefGroup
+        .map(ref => {
+          const audit = {...lhr.audits[ref.id], id: ref.id};
+          const baseAudit = baseLhr && baseLhr.audits[audit.id || ''];
+          const diffs = baseAudit
+            ? findAuditDiffs(baseAudit, audit, {...options, synthesizeItemKeyDiffs: true})
+            : [];
+          const maxSeverity = Math.max(...diffs.map(getDiffSeverity), 0);
+          return {audit, baseAudit, diffs, maxSeverity, group};
+        })
+        .sort((a, b) => (a.audit.score || 0) - (b.audit.score || 0));
+
+      const pairsWithDiffs = pairs.filter(pair => !pair.baseAudit || pair.diffs.length);
+      const pairsWithoutDiffs = pairs.filter(pair => pair.baseAudit && !pair.diffs.length);
+      if (pairsWithDiffs.length) {
+        auditGroups.push({id: groupId, group, pairs: pairsWithDiffs, showAsUnchanged: false});
+      }
+      if (pairsWithoutDiffs.length) {
+        unchangedAuditsGroup.pairs.push(...pairsWithoutDiffs);
+      }
+    }
+
+    if (unchangedAuditsGroup.pairs.length) {
+      auditGroups.push(unchangedAuditsGroup);
+    }
   }
+
   return auditGroups;
 }
 
@@ -111,6 +127,7 @@ const AuditGroups = props => {
           <AuditGroup
             key={auditGroup.id}
             showAsNarrow={props.showAsNarrow}
+            showAsUnchanged={auditGroup.showAsUnchanged}
             pairs={auditGroup.pairs}
             group={auditGroup.group}
             baseLhr={props.baseLhr}
@@ -126,8 +143,10 @@ const AuditGroups = props => {
 /** @param {{lhr: LH.Result, baseLhr: LH.Result|undefined, hookElements: LHCI.HookElements<'dropdowns'|'warnings'>, className?: string}} props */
 export const LhrComparison = props => {
   const {lhr, baseLhr} = props;
+  const defaultAck = /** @type {'none'|'acknowledged'|'closed'} */ ('none');
   const [percentAbsoluteDeltaThreshold, setDiffThreshold] = useState(0.05);
   const [selectedAuditId, setAuditId] = useState(/** @type {string|null} */ (null));
+  const [runtimeDiffAck, setRuntimeDiffAck] = useState(defaultAck);
 
   // Attach the LHRs to the window for easy debugging.
   useEffect(() => {
@@ -137,15 +156,25 @@ export const LhrComparison = props => {
     window.__BASE_LHR__ = baseLhr;
   }, [lhr, baseLhr]);
 
+  const runtimeDiffs = computeRuntimeDiffs(lhr, baseLhr);
+  const runtimeDiffsHaveError = runtimeDiffs.some(diff => diff.severity === 'error');
   const auditGroups = computeAuditGroups(lhr, baseLhr, {percentAbsoluteDeltaThreshold});
 
   return (
     <Fragment>
+      {runtimeDiffAck === 'none' && runtimeDiffsHaveError ? (
+        <Modal onClose={() => setRuntimeDiffAck('acknowledged')}>
+          <LhrRuntimeDiff diffs={runtimeDiffs} variant="full" />
+        </Modal>
+      ) : null}
       {selectedAuditId ? (
         <AuditDetailPane
           selectedAuditId={selectedAuditId}
           setSelectedAuditId={setAuditId}
-          pairs={auditGroups.map(group => group.pairs).reduce((a, b) => a.concat(b))}
+          pairs={auditGroups
+            .filter(group => !group.showAsUnchanged)
+            .map(group => group.pairs)
+            .reduce((a, b) => a.concat(b))}
           baseLhr={baseLhr}
         />
       ) : (
@@ -166,6 +195,17 @@ export const LhrComparison = props => {
         />
         <div className="container">
           {props.hookElements.warnings}
+          {runtimeDiffAck !== 'closed' && runtimeDiffs.length ? (
+            <Paper className="position-relative">
+              <LhrRuntimeDiff diffs={runtimeDiffs} variant="mini" />
+              <div
+                className="lhr-comparison-runtime-diff__close"
+                onClick={() => setRuntimeDiffAck('closed')}
+              >
+                <i className="material-icons">close</i>
+              </div>
+            </Paper>
+          ) : null}
           {auditGroups.length && baseLhr ? (
             <Fragment>
               {selectedAuditId ? null : (

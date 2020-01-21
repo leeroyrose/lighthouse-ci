@@ -2,11 +2,6 @@
 
 # This script requires LHCI_CANARY_SERVER_URL and LHCI_CANARY_SERVER_TOKEN variables to be set.
 
-if [[ "$TRAVIS_NODE_VERSION" != "10" ]]; then
-  echo "Not running dogfood script on node versions other than 10";
-  exit 0;
-fi
-
 set -ox pipefail
 
 # Start up our LHCI server.
@@ -32,6 +27,9 @@ if [[ -n "$LHCI_CANARY_SERVER_URL" ]]; then
     --serverBaseUrl="$LHCI_CANARY_SERVER_URL" \
     --token="$LHCI_CANARY_SERVER_TOKEN"
 fi
+
+# Upload the results to temporary public storage too
+yarn start upload --target=temporary-public-storage
 
 # Kill the LHCI server from earlier.
 kill $!
