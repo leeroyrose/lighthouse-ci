@@ -29,7 +29,7 @@
     "@babel/plugin-transform-react-jsx": "^7.3.0",
     "@babel/preset-env": "^7.4.5",
     "@storybook/addon-actions": "^5.3.10",
-    "@storybook/addon-links": "^5.3.10",
+    "@storybook/addon-links": "^6.1.21",
     "@storybook/addon-storyshots": "^5.3.12",
     "@storybook/addon-storyshots-puppeteer": "^5.3.12",
     "@storybook/addons": "^5.3.10",
